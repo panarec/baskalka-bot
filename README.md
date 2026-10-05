@@ -2,7 +2,7 @@
 
 Books free badminton courts at [Badminton Aréna Skalka](https://baskalka.e-rezervace.cz) (Bizzy e-rezervace).
 
-Every 5 minutes (GitHub Actions) it logs in, walks the next 14 days and, for each day where you
+Every 5 minutes (GitHub Actions, started by cron-job.org) it logs in, walks the next 14 days and, for each day where you
 don't have a reservation yet, books the earliest free 1-hour slot that:
 
 - starts between **17:30 and 20:00**
@@ -55,6 +55,20 @@ SMTP options that work:
 
 Optional repo variables (Settings → Secrets and variables → Actions → Variables):
 `EARLIEST_START`, `LATEST_START`, `MIN_LEAD_HOURS`, `MAX_DAYS`, `DURATION_MIN`, `DAYS` (e.g. `Mon,Wed,Fri`).
+
+### 5-minute trigger (cron-job.org)
+
+GitHub's own `schedule` trigger proved unreliable for this repo (it never fired), so
+[cron-job.org](https://cron-job.org) starts the workflow every 5 minutes; the `schedule` stays as a backup.
+
+1. GitHub → Settings → Developer settings → [Fine-grained tokens](https://github.com/settings/personal-access-tokens/new):
+   repository access *Only select repositories* → `baskalka-bot`, permission **Actions: Read and write**, nothing else.
+2. cron-job.org job, every 5 minutes:
+   - URL `https://api.github.com/repos/panarec/baskalka-bot/actions/workflows/book.yml/dispatches`, method **POST**
+   - headers `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, `Content-Type: application/json`
+   - body `{"ref":"main","inputs":{"dry_run":"false"}}`
+
+   GitHub answers `204 No Content` on success. When the token expires, runs stop - cron-job.org emails you about the failing job.
 
 Run manually: Actions → *Book badminton court* → Run workflow (dry run is on by default;
 tick "Only send a test email" to check the SMTP setup).
