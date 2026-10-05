@@ -1,0 +1,39 @@
+name: Book badminton court
+
+on:
+  schedule:
+    # Every 30 min (UTC). Kept off :00/:30, when GitHub's cron queue is busiest.
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only report what would be booked"
+        type: boolean
+        default: true
+
+concurrency:
+  group: book
+  cancel-in-progress: false
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python bot.py
+        env:
+          BASKALKA_USERNAME: ${{ secrets.BASKALKA_USERNAME }}
+          BASKALKA_PASSWORD: ${{ secrets.BASKALKA_PASSWORD }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          EARLIEST_START: ${{ vars.EARLIEST_START || '17:30' }}
+          LATEST_START: ${{ vars.LATEST_START || '20:00' }}
+          MIN_LEAD_HOURS: ${{ vars.MIN_LEAD_HOURS || '27' }}
+          MAX_DAYS: ${{ vars.MAX_DAYS || '14' }}
+          DURATION_MIN: ${{ vars.DURATION_MIN || '60' }}
