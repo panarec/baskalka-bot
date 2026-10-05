@@ -12,6 +12,7 @@ Rules (all overridable via env vars, see CONFIG below):
 Env: BASKALKA_USERNAME, BASKALKA_PASSWORD, optional DRY_RUN=1, NTFY_TOPIC,
 SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD/EMAIL_FROM/EMAIL_TO for an email per booking run.
 Exits 1 when a booking or the email failed, so GitHub's failed-run email reaches you.
+On GitHub Actions (public logs) only totals are logged; dates, courts and errors go to the email.
 """
 import html as htmllib
 import json
@@ -57,6 +58,8 @@ CONFIG = {
     "dry_run": os.environ.get("DRY_RUN", "0") == "1",
     "ntfy_topic": os.environ.get("NTFY_TOPIC", ""),
     "max_bookings": int(os.environ.get("MAX_BOOKINGS", "0")),  # per run, 0 = no limit
+    # The repo is public, so Actions logs are too: keep dates/courts out of them there.
+    "private_logs": os.environ.get("PRIVATE_LOGS", "1" if os.environ.get("GITHUB_ACTIONS") == "true" else "0") == "1",
 }
 
 
@@ -64,21 +67,24 @@ def log(*args):
     print(datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), *args, flush=True)
 
 
-def notify(title, message):
-    log(f"{title}: {message}")
-    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(summary, "a") as f:
-            f.write(f"### {title}\n{message}\n\n")
-    if CONFIG["ntfy_topic"]:
-        try:
-            requests.post(
-                f"https://ntfy.sh/{CONFIG['ntfy_topic']}",
-                data=message.encode(),
-                headers={"Title": title.encode("utf-8"), "Tags": "badminton"},
-                timeout=10,
-            )
-        except requests.RequestException as e:
-            log("ntfy failed:", e)
+def detail(*args):
+    """Log something that reveals when you play (dates, courts) - local runs only."""
+    if not CONFIG["private_logs"]:
+        log(*args)
+
+
+def ntfy(title, message):
+    if not CONFIG["ntfy_topic"]:
+        return
+    try:
+        requests.post(
+            f"https://ntfy.sh/{CONFIG['ntfy_topic']}",
+            data=message.encode(),
+            headers={"Title": title.encode("utf-8"), "Tags": "badminton"},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        log("ntfy failed:", e)
 
 
 def send_email(subject, body) -> bool:
@@ -314,7 +320,7 @@ class Bizzy:
         data["reservationForm:reservationAccountPaymentSelect"] = "CASH"
 
         if CONFIG["dry_run"]:
-            log(f"DRY RUN - would book {slot}")
+            detail(f"DRY RUN - would book {slot}")
             return False
 
         data.update({
@@ -325,10 +331,12 @@ class Bizzy:
         resp = self._post(data)
         # The store response carries no reliable success marker, so re-read the grid.
         after = self.load_day(slot.day.day)
-        ok = all((slot.row, c) in after.taken for c in range(slot.col, slot.col + CONFIG["duration_min"] // SLOT_MIN))
-        if not ok:
-            log("store response:", BeautifulSoup(resp, "html.parser").get_text(" ", strip=True)[:500])
-        return ok
+        if not all((slot.row, c) in after.taken for c in range(slot.col, slot.col + CONFIG["duration_min"] // SLOT_MIN)):
+            raise RuntimeError(
+                "court not taken after saving; server said: "
+                + BeautifulSoup(resp, "html.parser").get_text(" ", strip=True)[:500]
+            )
+        return True
 
 
 def candidate_days(now: datetime):
@@ -350,44 +358,58 @@ def main():
     bz = Bizzy()
     bz.login(user, pw)
 
-    booked, errors = [], 0
+    booked, failures, checked, candidates = [], [], 0, 0
     for day in candidate_days(now):
         if CONFIG["max_bookings"] and len(booked) >= CONFIG["max_bookings"]:
             break
         d = bz.load_day(day)
+        checked += 1
         if d.has_mine:
-            log(f"{day:%a %d.%m.}: you already have a reservation, skipping")
+            detail(f"{day:%a %d.%m.}: you already have a reservation, skipping")
             continue
         slots = free_slots(d, now)
         if not slots:
-            log(f"{day:%a %d.%m.}: nothing free")
+            detail(f"{day:%a %d.%m.}: nothing free")
             continue
         slot = slots[0]
-        log(f"{day:%a %d.%m.}: {len(slots)} free, trying {slot}")
+        candidates += 1
+        detail(f"{day:%a %d.%m.}: {len(slots)} free, trying {slot}")
         try:
             if bz.book(slot):
                 booked.append(slot)
-                notify("Court booked", f"{slot} (cancel free until {cancel_deadline(slot)})")
-            elif not CONFIG["dry_run"]:
-                errors += 1
-                notify("Booking failed", f"{slot} - see workflow log")
+                detail(f"booked {slot}")
         except Exception as e:  # keep going with other days
-            errors += 1
-            notify("Booking error", f"{slot}: {e}")
+            failures.append(f"{slot}: {e}")
+            detail(f"FAILED {slot}: {e}")
             bz.load_day(day)  # resync server-side view state
 
+    ok = notify(booked, failures)
+    dry = f", dry run: would book {candidates}" if CONFIG["dry_run"] else ""
+    log(f"checked {checked} days, booked {len(booked)}, failed {len(failures)}{dry}")
+    return 0 if ok and not failures else 1
+
+
+def notify(booked, failures) -> bool:
+    """Email (and ntfy) the details; the public job summary only gets counts."""
+    if not (booked or failures):
+        return True
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a") as f:
+            f.write(f"Booked {len(booked)}, failed {len(failures)} - details sent by email.\n")
     if booked:
         subject = f"Badminton booked: {booked[0]}" if len(booked) == 1 else f"Badminton: {len(booked)} courts booked"
-        lines = [f"- {s}  (cancel free until {cancel_deadline(s)})" for s in booked]
-        body = "\n".join([
-            "baskalka-bot booked:", "", *lines, "",
-            "Payment: at the desk (hotově/kartou).",
-            f"Cancel / view: {SCHEDULE_URL} -> Moje rezervace",
-        ])
-        if not send_email(subject, body):
-            errors += 1
-    log(f"done, booked {len(booked)}, errors {errors}")
-    return 1 if errors else 0
+    else:
+        subject = f"Badminton: booking failed ({len(failures)})"
+    lines = []
+    if booked:
+        lines += ["Booked:", *[f"- {s}  (cancel free until {cancel_deadline(s)})" for s in booked], ""]
+    if failures:
+        lines += ["Failed (check Moje rezervace - a failed attempt may still have gone through):",
+                  *[f"- {f}" for f in failures], ""]
+    lines += ["Payment: at the desk (hotově/kartou).", f"Cancel / view: {SCHEDULE_URL} -> Moje rezervace"]
+    body = "\n".join(lines)
+    ntfy(subject, body)
+    return send_email(subject, body)
 
 
 def cancel_deadline(slot: Slot) -> str:

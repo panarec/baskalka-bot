@@ -16,6 +16,10 @@ After a run that booked something you get one email listing the courts and their
 deadlines. If a booking or that email fails, the run is marked failed, so GitHub's own
 "workflow failed" email reaches you instead.
 
+The repo is public, so its Actions logs are too. There the bot logs only totals
+("checked 10 days, booked 1, failed 0"); dates, courts and error details go only into the email.
+Local runs log everything (force either way with `PRIVATE_LOGS=1` / `0`).
+
 ## How it works
 
 No browser. The schedule page embeds the grid as JSON (`var scheduleData`); events are
