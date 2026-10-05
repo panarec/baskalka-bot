@@ -31,9 +31,16 @@ jobs:
           BASKALKA_USERNAME: ${{ secrets.BASKALKA_USERNAME }}
           BASKALKA_PASSWORD: ${{ secrets.BASKALKA_PASSWORD }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           EARLIEST_START: ${{ vars.EARLIEST_START || '17:30' }}
           LATEST_START: ${{ vars.LATEST_START || '20:00' }}
           MIN_LEAD_HOURS: ${{ vars.MIN_LEAD_HOURS || '27' }}
           MAX_DAYS: ${{ vars.MAX_DAYS || '14' }}
+          DAYS: ${{ vars.DAYS || 'Mon,Tue,Wed,Thu,Fri' }}
           DURATION_MIN: ${{ vars.DURATION_MIN || '60' }}

@@ -5,18 +5,23 @@ Rules (all overridable via env vars, see CONFIG below):
   * slot starts at or after EARLIEST_START (17:30) and no later than LATEST_START (20:00)
   * slot starts at least MIN_LEAD_HOURS (27h = 24h free-cancel window + 3h buffer) from now
   * slot starts at most MAX_DAYS (14) days from now
+  * only on DAYS (Mon-Fri)
   * DURATION_MIN (60) minutes on one court
   * at most one booking per day (days where you already have a reservation are skipped)
 
-Env: BASKALKA_USERNAME, BASKALKA_PASSWORD, optional DRY_RUN=1, NTFY_TOPIC.
+Env: BASKALKA_USERNAME, BASKALKA_PASSWORD, optional DRY_RUN=1, NTFY_TOPIC,
+SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD/EMAIL_FROM/EMAIL_TO for an email per booking run.
+Exits 1 when a booking or the email failed, so GitHub's failed-run email reaches you.
 """
 import html as htmllib
 import json
 import os
 import re
+import smtplib
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from email.message import EmailMessage
 from zoneinfo import ZoneInfo
 
 import requests
@@ -35,11 +40,19 @@ def _env_time(name, default):
     return time(int(h), int(m))
 
 
+WEEKDAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def _env_days(name, default):
+    return {WEEKDAY_NAMES.index(d.strip().lower()[:3]) for d in os.environ.get(name, default).split(",")}
+
+
 CONFIG = {
     "earliest_start": _env_time("EARLIEST_START", "17:30"),
     "latest_start": _env_time("LATEST_START", "20:00"),
     "min_lead": timedelta(hours=float(os.environ.get("MIN_LEAD_HOURS", "27"))),
     "max_days": int(os.environ.get("MAX_DAYS", "14")),
+    "days": _env_days("DAYS", "Mon,Tue,Wed,Thu,Fri"),  # date.weekday() numbers
     "duration_min": int(os.environ.get("DURATION_MIN", "60")),
     "dry_run": os.environ.get("DRY_RUN", "0") == "1",
     "ntfy_topic": os.environ.get("NTFY_TOPIC", ""),
@@ -66,6 +79,33 @@ def notify(title, message):
             )
         except requests.RequestException as e:
             log("ntfy failed:", e)
+
+
+def send_email(subject, body) -> bool:
+    host, to = os.environ.get("SMTP_HOST"), os.environ.get("EMAIL_TO")
+    if not (host and to):
+        log("email not configured (SMTP_HOST / EMAIL_TO) - failing the run so GitHub emails you instead")
+        return False
+    user, password = os.environ.get("SMTP_USER", ""), os.environ.get("SMTP_PASSWORD", "")
+    port = int(os.environ.get("SMTP_PORT") or "587")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = os.environ.get("EMAIL_FROM") or user
+    msg["To"] = to
+    msg.set_content(body)
+    try:
+        smtp = smtplib.SMTP_SSL(host, port, timeout=30) if port == 465 else smtplib.SMTP(host, port, timeout=30)
+        with smtp:
+            if port != 465:
+                smtp.starttls()
+            if user:
+                smtp.login(user, password)
+            smtp.send_message(msg)
+    except (smtplib.SMTPException, OSError) as e:
+        log("email failed:", e)
+        return False
+    log(f"email sent to {to}")
+    return True
 
 
 @dataclass
@@ -295,7 +335,8 @@ def candidate_days(now: datetime):
     d = (now + CONFIG["min_lead"]).date()
     last = (now + timedelta(days=CONFIG["max_days"])).date()
     while d <= last:
-        yield d
+        if d.weekday() in CONFIG["days"]:
+            yield d
         d += timedelta(days=1)
 
 
@@ -307,7 +348,7 @@ def main():
     bz = Bizzy()
     bz.login(user, pw)
 
-    booked = []
+    booked, errors = [], 0
     for day in candidate_days(now):
         if CONFIG["max_bookings"] and len(booked) >= CONFIG["max_bookings"]:
             break
@@ -324,14 +365,32 @@ def main():
         try:
             if bz.book(slot):
                 booked.append(slot)
-                notify("Court booked", f"{slot} (cancel free until {slot.start - timedelta(hours=24):%a %d.%m. %H:%M})")
+                notify("Court booked", f"{slot} (cancel free until {cancel_deadline(slot)})")
             elif not CONFIG["dry_run"]:
+                errors += 1
                 notify("Booking failed", f"{slot} - see workflow log")
         except Exception as e:  # keep going with other days
+            errors += 1
             notify("Booking error", f"{slot}: {e}")
             bz.load_day(day)  # resync server-side view state
-    log(f"done, booked {len(booked)}")
+
+    if booked:
+        subject = f"Badminton booked: {booked[0]}" if len(booked) == 1 else f"Badminton: {len(booked)} courts booked"
+        lines = [f"- {s}  (cancel free until {cancel_deadline(s)})" for s in booked]
+        body = "\n".join([
+            "baskalka-bot booked:", "", *lines, "",
+            "Payment: at the desk (hotově/kartou).",
+            f"Cancel / view: {SCHEDULE_URL} -> Moje rezervace",
+        ])
+        if not send_email(subject, body):
+            errors += 1
+    log(f"done, booked {len(booked)}, errors {errors}")
+    return 1 if errors else 0
+
+
+def cancel_deadline(slot: Slot) -> str:
+    return f"{slot.start - timedelta(hours=24):%a %d.%m. %H:%M}"
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

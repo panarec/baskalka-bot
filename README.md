@@ -8,8 +8,13 @@ don't have a reservation yet, books the earliest free 1-hour slot that:
 - starts between **17:30 and 20:00**
 - starts at least **27 h** from now (24 h free-cancellation window + 3 h for you to decide)
 - starts at most **14 days** from now
+- is on a **weekday** (Mon-Fri)
 
 Payment is set to "hotově/kartou" (pay at the desk). Cancel for free up to 24 h before the start.
+
+After a run that booked something you get one email listing the courts and their free-cancellation
+deadlines. If a booking or that email fails, the run is marked failed, so GitHub's own
+"workflow failed" email reaches you instead.
 
 ## How it works
 
@@ -31,10 +36,21 @@ GitHub repo secrets:
 |---|---|
 | `BASKALKA_USERNAME` | login |
 | `BASKALKA_PASSWORD` | password |
+| `EMAIL_TO` | where booking emails go |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | SMTP account that sends them (port 465 = SSL, otherwise STARTTLS) |
+| `EMAIL_FROM` | optional, defaults to `SMTP_USER` |
 | `NTFY_TOPIC` | optional - push notification via [ntfy.sh](https://ntfy.sh) on every booking |
 
+SMTP options that work:
+
+- **Resend** (free): sign up with the `EMAIL_TO` address, create an API key, then
+  `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=465`, `SMTP_USER=resend`, `SMTP_PASSWORD=<api key>`,
+  `EMAIL_FROM=onboarding@resend.dev` (without a verified domain Resend only delivers to your own address - which is the point).
+- **Gmail** with an [app password](https://myaccount.google.com/apppasswords):
+  `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_USER=<you>@gmail.com`, `SMTP_PASSWORD=<app password>`.
+
 Optional repo variables (Settings → Secrets and variables → Actions → Variables):
-`EARLIEST_START`, `LATEST_START`, `MIN_LEAD_HOURS`, `MAX_DAYS`, `DURATION_MIN`.
+`EARLIEST_START`, `LATEST_START`, `MIN_LEAD_HOURS`, `MAX_DAYS`, `DURATION_MIN`, `DAYS` (e.g. `Mon,Wed,Fri`).
 
 Run manually: Actions → *Book badminton court* → Run workflow (dry run is on by default).
 
