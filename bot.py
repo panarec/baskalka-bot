@@ -8,12 +8,16 @@ Rules (all overridable via env vars, see CONFIG below):
   * only on DAYS (Mon-Fri)
   * DURATION_MIN (60) minutes on one court
   * at most one booking per day (days where you already have a reservation are skipped)
+  * a day is never booked again once you've had a reservation there - so cancelling sticks.
+    The site deletes cancelled reservations, so the bot remembers such days itself (STATE_FILE).
 
 Env: BASKALKA_USERNAME, BASKALKA_PASSWORD, optional DRY_RUN=1, NTFY_TOPIC,
 SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD/EMAIL_FROM/EMAIL_TO for an email per booking run.
 Exits 1 when a booking or the email failed, so GitHub's failed-run email reaches you.
 On GitHub Actions (public logs) only totals are logged; dates, courts and errors go to the email.
 """
+import hashlib
+import hmac
 import html as htmllib
 import json
 import os
@@ -186,6 +190,46 @@ def parse_day(day: date, html: str) -> Day:
     return Day(day, datetime.combine(day, time(h, m), TZ), courts, grid["cols"], taken, has_mine)
 
 
+class State:
+    """Days you've had a reservation on (booked by the bot or by you), kept across runs.
+
+    Stored as keyed hashes of the dates, so the file reveals nothing without STATE_KEY.
+    """
+
+    KEEP = timedelta(days=30)  # the booking window is 14 days, so older entries are in the past
+
+    def __init__(self, path: str, key: str):
+        self.path, self.key = path, key.encode()
+        try:
+            with open(path) as f:
+                self.seen = json.load(f)["seen"]  # token -> unix time first seen
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            self.seen = {}
+        self.changed = False
+
+    def _token(self, day: date) -> str:
+        return hmac.new(self.key, day.isoformat().encode(), hashlib.sha256).hexdigest()[:20]
+
+    def __contains__(self, day: date) -> bool:
+        return self._token(day) in self.seen
+
+    def add(self, day: date):
+        if day not in self:
+            self.seen[self._token(day)] = int(datetime.now(TZ).timestamp())
+            self.changed = True
+
+    def save(self):
+        cutoff = (datetime.now(TZ) - self.KEEP).timestamp()
+        kept = {t: ts for t, ts in self.seen.items() if ts >= cutoff}
+        self.changed |= len(kept) != len(self.seen)
+        if self.changed:
+            with open(self.path, "w") as f:
+                json.dump({"seen": kept}, f)
+        if out := os.environ.get("GITHUB_OUTPUT"):
+            with open(out, "a") as f:
+                f.write(f"state_changed={'true' if self.changed else 'false'}\n")
+
+
 def free_slots(d: Day, now: datetime):
     n = CONFIG["duration_min"] // SLOT_MIN
     out = []
@@ -355,6 +399,7 @@ def main():
     user, pw = os.environ.get("BASKALKA_USERNAME"), os.environ.get("BASKALKA_PASSWORD")
     if not (user and pw):
         sys.exit("BASKALKA_USERNAME / BASKALKA_PASSWORD not set")
+    state = State(os.environ.get("STATE_FILE", "state.json"), os.environ.get("STATE_KEY") or user + pw)
     bz = Bizzy()
     bz.login(user, pw)
 
@@ -365,7 +410,11 @@ def main():
         d = bz.load_day(day)
         checked += 1
         if d.has_mine:
+            state.add(day)
             detail(f"{day:%a %d.%m.}: you already have a reservation, skipping")
+            continue
+        if day in state:
+            detail(f"{day:%a %d.%m.}: you had a reservation here before (cancelled?), skipping")
             continue
         slots = free_slots(d, now)
         if not slots:
@@ -377,12 +426,15 @@ def main():
         try:
             if bz.book(slot):
                 booked.append(slot)
+                state.add(day)
                 detail(f"booked {slot}")
         except Exception as e:  # keep going with other days
             failures.append(f"{slot}: {e}")
+            state.add(day)  # one attempt per day: no retry storm, and it may have gone through anyway
             detail(f"FAILED {slot}: {e}")
             bz.load_day(day)  # resync server-side view state
 
+    state.save()
     ok = notify(booked, failures)
     dry = f", dry run: would book {candidates}" if CONFIG["dry_run"] else ""
     log(f"checked {checked} days, booked {len(booked)}, failed {len(failures)}{dry}")
@@ -404,7 +456,8 @@ def notify(booked, failures) -> bool:
     if booked:
         lines += ["Booked:", *[f"- {s}  (cancel free until {cancel_deadline(s)})" for s in booked], ""]
     if failures:
-        lines += ["Failed (check Moje rezervace - a failed attempt may still have gone through):",
+        lines += ["Failed (check Moje rezervace - a failed attempt may still have gone through;"
+                  " the bot won't retry these days):",
                   *[f"- {f}" for f in failures], ""]
     lines += ["Payment: at the desk (hotově/kartou).", f"Cancel / view: {SCHEDULE_URL} -> Moje rezervace"]
     body = "\n".join(lines)

@@ -35,7 +35,14 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python bot.py ${{ inputs.test_email && '--test-email' || '' }}
+      # Days you've had a reservation on (hashed), so cancelled days aren't re-booked.
+      - uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+      - id: bot
+        run: python bot.py ${{ inputs.test_email && '--test-email' || '' }}
         env:
           BASKALKA_USERNAME: ${{ secrets.BASKALKA_USERNAME }}
           BASKALKA_PASSWORD: ${{ secrets.BASKALKA_PASSWORD }}
@@ -46,6 +53,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          STATE_KEY: ${{ secrets.STATE_KEY }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           EARLIEST_START: ${{ vars.EARLIEST_START || '17:30' }}
           LATEST_START: ${{ vars.LATEST_START || '20:00' }}
@@ -53,6 +61,11 @@ jobs:
           MAX_DAYS: ${{ vars.MAX_DAYS || '14' }}
           DAYS: ${{ vars.DAYS || 'Mon,Tue,Wed,Thu,Fri' }}
           DURATION_MIN: ${{ vars.DURATION_MIN || '60' }}
+      - uses: actions/cache/save@v4
+        if: always() && steps.bot.outputs.state_changed == 'true'
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
 
   keepalive:
     if: github.event.schedule == '0 4 1 * *'

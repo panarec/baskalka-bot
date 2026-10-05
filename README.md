@@ -12,6 +12,11 @@ don't have a reservation yet, books the earliest free 1-hour slot that:
 
 Payment is set to "hotově/kartou" (pay at the desk). Cancel for free up to 24 h before the start.
 
+Once you've had a reservation on a day (booked by the bot or by you), the bot never books that day
+again - so if you cancel, it stays cancelled. The site deletes cancelled reservations without a
+trace, so the bot remembers these days itself: `state.json`, kept in the Actions cache between runs,
+holding only HMAC hashes of the dates (key: `STATE_KEY` secret).
+
 After a run that booked something you get one email listing the courts and their free-cancellation
 deadlines. If a booking or that email fails, the run is marked failed, so GitHub's own
 "workflow failed" email reaches you instead.
@@ -43,6 +48,7 @@ GitHub repo secrets:
 | `EMAIL_TO` | where booking emails go |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | SMTP account that sends them (port 465 = SSL, otherwise STARTTLS) |
 | `EMAIL_FROM` | optional, defaults to `SMTP_USER` |
+| `STATE_KEY` | random string used to hash the remembered dates |
 | `NTFY_TOPIC` | optional - push notification via [ntfy.sh](https://ntfy.sh) on every booking |
 
 SMTP options that work:
