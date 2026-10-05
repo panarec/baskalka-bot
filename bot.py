@@ -341,6 +341,8 @@ def candidate_days(now: datetime):
 
 
 def main():
+    if "--test-email" in sys.argv:
+        return 0 if send_email("baskalka-bot test", "Email notifications from baskalka-bot work.") else 1
     now = datetime.now(TZ)
     user, pw = os.environ.get("BASKALKA_USERNAME"), os.environ.get("BASKALKA_PASSWORD")
     if not (user and pw):

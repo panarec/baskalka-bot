@@ -10,6 +10,10 @@ on:
         description: "Only report what would be booked"
         type: boolean
         default: true
+      test_email:
+        description: "Only send a test email"
+        type: boolean
+        default: false
 
 concurrency:
   group: book
@@ -26,7 +30,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python bot.py
+      - run: python bot.py ${{ inputs.test_email && '--test-email' || '' }}
         env:
           BASKALKA_USERNAME: ${{ secrets.BASKALKA_USERNAME }}
           BASKALKA_PASSWORD: ${{ secrets.BASKALKA_PASSWORD }}

@@ -52,7 +52,8 @@ SMTP options that work:
 Optional repo variables (Settings → Secrets and variables → Actions → Variables):
 `EARLIEST_START`, `LATEST_START`, `MIN_LEAD_HOURS`, `MAX_DAYS`, `DURATION_MIN`, `DAYS` (e.g. `Mon,Wed,Fri`).
 
-Run manually: Actions → *Book badminton court* → Run workflow (dry run is on by default).
+Run manually: Actions → *Book badminton court* → Run workflow (dry run is on by default;
+tick "Only send a test email" to check the SMTP setup).
 
 ## Local
 
