@@ -2,7 +2,7 @@
 
 Books free badminton courts at [Badminton Aréna Skalka](https://baskalka.e-rezervace.cz) (Bizzy e-rezervace).
 
-Every 30 minutes (GitHub Actions) it logs in, walks the next 14 days and, for each day where you
+Every 5 minutes (GitHub Actions) it logs in, walks the next 14 days and, for each day where you
 don't have a reservation yet, books the earliest free 1-hour slot that:
 
 - starts between **17:30 and 20:00**

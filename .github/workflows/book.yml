@@ -2,8 +2,11 @@ name: Book badminton court
 
 on:
   schedule:
-    # Every 30 min (UTC). Kept off :00/:30, when GitHub's cron queue is busiest.
-    - cron: "7,37 * * * *"
+    # Every 5 min (GitHub's minimum; runs often start a few minutes late).
+    # Offset from :00, when GitHub's cron queue is busiest.
+    - cron: "2-59/5 * * * *"
+    # Monthly keep-alive: GitHub pauses schedules in public repos after 60 days without activity.
+    - cron: "0 4 1 * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -15,14 +18,17 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: book
-  cancel-in-progress: false
+permissions:
+  contents: read
 
 jobs:
   book:
+    if: github.event.schedule != '0 4 1 * *'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: book
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,3 +54,13 @@ jobs:
           MAX_DAYS: ${{ vars.MAX_DAYS || '14' }}
           DAYS: ${{ vars.DAYS || 'Mon,Tue,Wed,Thu,Fri' }}
           DURATION_MIN: ${{ vars.DURATION_MIN || '60' }}
+
+  keepalive:
+    if: github.event.schedule == '0 4 1 * *'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/book.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
